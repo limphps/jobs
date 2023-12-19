@@ -222,7 +222,7 @@ abstract class Job
             return call_user_func($callback);
         } catch (\RedisException $e) {
             $this->adapterConnectRedis();
-            if ($this->queue->isConntected()) {
+            if ($this->queue->isConnected()) {
                 return call_user_func($callback);
             }
         }
