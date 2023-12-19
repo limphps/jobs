@@ -1,0 +1,21 @@
+{
+    "name": "limphps/jobs",
+    "description": "multi process message queue",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "limphps",
+            "email": "limphp@outlook.com"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "php": ">=7.1.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Limphps\\Jobs\\": "src"
+        }
+    }
+}
