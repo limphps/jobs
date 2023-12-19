@@ -13,6 +13,8 @@ use Throwable;
  */
 class Process
 {
+    private $processTitle = '';
+
     /**
      * 主进程文件
      * @var string
@@ -34,9 +36,11 @@ class Process
     /**
      * 构造方法
      * @param string $runtimeDir 运行时存储进程文件和日志的目录
+     * @param string $processTitle
      */
-    public function __construct(string $runtimeDir)
+    public function __construct(string $processTitle, string $runtimeDir)
     {
+        $this->processTitle = $processTitle;
         $this->masterPidFile = rtrim($runtimeDir, '/') . '/master.pid';
         $this->logFile = rtrim($runtimeDir, '/') . '/logs/process.log';
 
@@ -51,12 +55,13 @@ class Process
 
     /**
      * 初始化
+     * @param string $processTitle
      * @param string $runtimeDir
      * @return self
      */
-    public static function init(string $runtimeDir): self
+    public static function init(string $processTitle, string $runtimeDir): self
     {
-        return new self($runtimeDir);
+        return new self($processTitle, $runtimeDir);
     }
 
     /**
@@ -121,6 +126,7 @@ class Process
             return;
         }
 
+        cli_set_process_title($this->processTitle . ':master');
         $this->daemon();
         $masterPid = getmypid();
         $this->storeMasterPid($masterPid);
@@ -245,6 +251,9 @@ class Process
                     $type = $isDynamic ? 'dynamic' : 'static';
                     $startTime = time();
                     $consumeCount = 0;
+
+                    cli_set_process_title($this->processTitle . ':worker-' . $type);
+
                     if ($job->workerEnabledTime > $startTime) {
                         $punishmentSleep = $job->workerEnabledTime - $startTime;
                         $this->log('worker started, but will punishment sleep ', $punishmentSleep, ' seconds, topic=', $job->topic, ', pid=', getmypid(), ', type=', $type);
@@ -252,6 +261,7 @@ class Process
                     } else {
                         $this->log('worker started, topic=', $job->topic, ', pid=', getmypid(), ', type=', $type);
                     }
+
                     while (true) {
                         if (null !== $message = $job->brPop()) {
                             $job->doJob($message);

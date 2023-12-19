@@ -21,7 +21,7 @@ if (is_file(__DIR__ . '/../vendor/autoload.php')) {
     });
 }
 
-Process::init(__DIR__)
+Process::init('testjobs', __DIR__)
     ->registerJob(new TestJob1())
     ->registerJob(new TestJob2())
     ->execute($argv[1] ?? '');
