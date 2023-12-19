@@ -5,7 +5,7 @@
     "license": "MIT",
     "authors": [
         {
-            "name": "limphps",
+            "name": "Jason",
             "email": "limphp@outlook.com"
         }
     ],
@@ -15,7 +15,7 @@
     },
     "autoload": {
         "psr-4": {
-            "Limphps\\Jobs\\": "src"
+            "Limphp\\Jobs\\": "src"
         }
     }
 }
