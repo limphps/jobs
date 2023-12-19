@@ -141,11 +141,12 @@ class Process
                 $sleep = 100000;
             }
 
+            $time = time();
             $status = 0;
             if ((0 < $workerPid = pcntl_waitpid(-1, $status, WNOHANG)) && (!!$job = $this->loadJob($workerPid))) {
                 if (pcntl_wexitstatus($status) > 0) {
                     $this->log('worker exited with error, topic=', $job->topic, ', pid=', $workerPid, true);
-                    $job->workerEnabledTime = time() + 60;
+                    $job->workerEnabledTime = $time + 60;
                 } else {
                     $this->log('worker exited, topic=', $job->topic, ', pid=', $workerPid);
                 }
@@ -160,7 +161,8 @@ class Process
                 break;
             }
 
-            if (time() - $lastCheckOverstockTime > 60) {
+            if ($time - $lastCheckOverstockTime > 60) {
+                $lastCheckOverstockTime = $time;
                 $this->dynamicFork($masterPid);
             }
 
@@ -240,14 +242,15 @@ class Process
                 throw new Exception('fork worker error');
             case 0:
                 try {
+                    $type = $isDynamic ? 'dynamic' : 'static';
                     $startTime = time();
                     $consumeCount = 0;
                     if ($job->workerEnabledTime > $startTime) {
                         $punishmentSleep = $job->workerEnabledTime - $startTime;
-                        $this->log('worker started, but will punishment sleep ', $punishmentSleep, ' seconds, topic=', $job->topic, ', pid=', getmypid());
+                        $this->log('worker started, but will punishment sleep ', $punishmentSleep, ' seconds, topic=', $job->topic, ', pid=', getmypid(), ', type=', $type);
                         sleep($punishmentSleep);
                     } else {
-                        $this->log('worker started, topic=', $job->topic, ', pid=', getmypid());
+                        $this->log('worker started, topic=', $job->topic, ', pid=', getmypid(), ', type=', $type);
                     }
                     while (true) {
                         if (null !== $message = $job->brPop()) {
