@@ -108,9 +108,13 @@ abstract class Job
     {
         $job = self::instance();
         if ($job->isDelay) {
-            return $job->queue->zAdd($job->topic, $expectedRunTime, $message) ? true : false;
+            return $job->adapterCommandRedis(function () use ($job, $message, $expectedRunTime) {
+                return $job->queue->zAdd($job->topic, $expectedRunTime, $message) ? true : false;
+            });
         } else {
-            return $job->queue->lPush($job->topic, $message) ? true : false;
+            return $job->adapterCommandRedis(function () use ($job, $message) {
+                return $job->queue->lPush($job->topic, $message) ? true : false;
+            });
         }
     }
 
@@ -123,7 +127,9 @@ abstract class Job
     {
         $job = self::instance();
         if ($job->isDelay) {
-            return $job->queue->zRem(self::instance()->topic, $message) ? true : false;
+            return $job->adapterCommandRedis(function () use ($job, $message) {
+                return $job->queue->zRem(self::instance()->topic, $message) ? true : false;
+            });
         }
         return false;
     }
@@ -203,7 +209,7 @@ abstract class Job
      * @param callable $callback
      * @return mixed
      */
-    private final function adapterCommandRedis(callable $callback)
+    public final function adapterCommandRedis(callable $callback)
     {
         try {
             if (!$this->queue) {
