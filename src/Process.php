@@ -31,7 +31,6 @@ class Process
      */
     private $jobs = [];
 
-
     /**
      * 构造方法
      * @param string $runtimeDir 运行时存储进程文件和日志的目录
@@ -71,6 +70,8 @@ class Process
             $job->staticWorkerCount = min(1000, max(1, intval($job->staticWorkerCount)));
             $job->dynamicWorkerCount = min(1000, max(1, intval($job->dynamicWorkerCount)));
             $job->healthQueueLength = intval($job->healthQueueLength);
+            $job->maxExecuteTime = intval($job->maxExecuteTime);
+            $job->maxConsumeCount = intval($job->maxConsumeCount);
             $job->workers = [];
             $job->workerEnabledTime = 0;
             $this->jobs[$job->topic] = $job;
@@ -123,6 +124,7 @@ class Process
         $this->daemon();
         $masterPid = getmypid();
         $this->storeMasterPid($masterPid);
+        echo "process start success\n";
         $this->log('master started, pid=', $masterPid);
 
         foreach ($this->jobs as &$job) {
@@ -239,6 +241,7 @@ class Process
             case 0:
                 try {
                     $startTime = time();
+                    $consumeCount = 0;
                     if ($job->workerEnabledTime > $startTime) {
                         $punishmentSleep = $job->workerEnabledTime - $startTime;
                         $this->log('worker started, but will punishment sleep ', $punishmentSleep, ' seconds, topic=', $job->topic, ', pid=', getmypid());
@@ -249,8 +252,12 @@ class Process
                     while (true) {
                         if (null !== $message = $job->brPop()) {
                             $job->doJob($message);
+                            $consumeCount++;
                         }
-                        if ($this->getMasterPid() !== $masterPid || (time() - $startTime) > $job->maxExecuteTime) {
+                        if (
+                            $this->getMasterPid() !== $masterPid || ($job->maxExecuteTime > 0 && (time() - $startTime) > $job->maxExecuteTime)
+                            || ($job->maxExecuteTime > 0 && $consumeCount > $job->maxExecuteTime)
+                        ) {
                             break;
                         }
                     }
@@ -282,7 +289,6 @@ class Process
         } catch (Throwable $e) {
             throw $e;
         }
-
     }
 
     /**

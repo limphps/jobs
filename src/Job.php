@@ -50,6 +50,12 @@ abstract class Job
     public $maxExecuteTime = 100;
 
     /**
+     * 单次子进程最长消费消息数
+     * @var integer
+     */
+    public $maxConsumeCount = 100;
+
+    /**
      * 单例
      * @var Job
      */
@@ -162,7 +168,6 @@ abstract class Job
                 $message = $data[1];
             }
         }
-
         return $message;
     }
 
@@ -182,7 +187,6 @@ abstract class Job
                 return $this->queue->lLen($this->topic);
             });
         }
-
         return $data ? intval($data) : 0;
     }
 
