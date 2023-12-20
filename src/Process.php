@@ -249,11 +249,9 @@ class Process
             case 0:
                 try {
                     $type = $isDynamic ? 'dynamic' : 'static';
+                    cli_set_process_title($this->processTitle . ':worker-' . $type);
                     $startTime = time();
                     $consumeCount = 0;
-
-                    cli_set_process_title($this->processTitle . ':worker-' . $type);
-
                     if ($job->workerEnabledTime > $startTime) {
                         $punishmentSleep = $job->workerEnabledTime - $startTime;
                         $this->log('worker started, but will punishment sleep ', $punishmentSleep, ' seconds, topic=', $job->topic, ', pid=', getmypid(), ', type=', $type);
@@ -261,7 +259,6 @@ class Process
                     } else {
                         $this->log('worker started, topic=', $job->topic, ', pid=', getmypid(), ', type=', $type);
                     }
-
                     while (true) {
                         if (null !== $message = $job->brPop()) {
                             $job->doJob($message);

@@ -150,7 +150,7 @@ abstract class Job
         $message = null;
         if ($this->isDelay) {
             $data = $this->adapterCommandRedis(function () {
-                return $this->queue->zRangeByScore($this->topic, 0, time(), ['withscores' => false, 'limit' => [0, 1]]);
+                return $this->queue->zRangeByScore($this->topic, '0', strval(time()), ['withscores' => false, 'limit' => [0, 1]]);
             });
             if (!!$data) {
                 $message = $data[0];
@@ -180,7 +180,7 @@ abstract class Job
     {
         if ($this->isDelay) {
             $data = $this->adapterCommandRedis(function () {
-                return $this->queue->zCount($this->topic, 0, time());
+                return $this->queue->zCount($this->topic, '0', strval(time()));
             });
         } else {
             $data = $this->adapterCommandRedis(function () {
