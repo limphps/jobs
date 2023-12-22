@@ -14,6 +14,12 @@ use Throwable;
 class Process
 {
     /**
+     * 日志警报钩子
+     * @var callable
+     */
+    private $alarmHook = null;
+
+    /**
      * 进程名前缀
      * @var string
      */
@@ -91,6 +97,17 @@ class Process
     }
 
     /**
+     * 注册日志警报钩子
+     * @param callable $callback
+     * @return self
+     */
+    public function registerAlarmHook(callable $callback): self
+    {
+        $this->alarmHook = $callback;
+        return $this;
+    }
+
+    /**
      * 执行脚本
      * @param string $cmd
      * @return void
@@ -141,8 +158,8 @@ class Process
      */
     private function start(): void
     {
-        cli_set_process_title($this->processTitle . ':master');
         $this->daemon();
+        cli_set_process_title($this->processTitle . ':master');
         $masterPid = getmypid();
         $this->storeMasterPid($masterPid);
         echo "process start success\n";
@@ -165,9 +182,9 @@ class Process
                 }
             }
         });
+
         while (true) {
             pcntl_signal_dispatch();
-
             $time = time();
             $status = 0;
             if ((0 < $workerPid = pcntl_waitpid(-1, $status, WNOHANG)) && (!!$job = $this->loadJob($workerPid))) {
@@ -229,7 +246,7 @@ class Process
      * @param integer $masterPid
      * @return void
      */
-    public function dynamicFork(int $masterPid): void
+    private function dynamicFork(int $masterPid): void
     {
         foreach ($this->jobs as &$job) {
             if ($job->healthQueueLength > 0 && $job->dynamicWorkerCount > 0 && count($job->workers) <= $job->staticWorkerCount && $job->size() > $job->healthQueueLength) {
@@ -246,7 +263,7 @@ class Process
      * @param int $workerPid
      * @return Job|null
      */
-    public function loadJob(int $workerPid): ?Job
+    private function loadJob(int $workerPid): ?Job
     {
         foreach ($this->jobs as &$job) {
             if (isset($job->workers[$workerPid])) {
@@ -263,7 +280,7 @@ class Process
      * @param int $masterPid
      * @return void
      */
-    public function forkWorker(Job $job, bool $isDynamic, int $masterPid)
+    private function forkWorker(Job $job, bool $isDynamic, int $masterPid)
     {
         $pid = pcntl_fork();
         switch ($pid) {
@@ -317,7 +334,7 @@ class Process
      * @param int $masterPid
      * @return void
      */
-    public function storeMasterPid(int $masterPid): void
+    private function storeMasterPid(int $masterPid): void
     {
         $dir = dirname($this->masterPidFile);
         clearstatcache(true, $dir);
@@ -331,7 +348,7 @@ class Process
      * 获取正在运行的主进程ID
      * @return integer
      */
-    public function getRunningMasterPid(): int
+    private function getRunningMasterPid(): int
     {
         clearstatcache(true, $this->masterPidFile);
         if (is_file($this->masterPidFile) && is_readable($this->masterPidFile) && (!!$masterPid = file_get_contents($this->masterPidFile)) && is_numeric($masterPid) && (1 <= $masterPid = intval($masterPid))) {
@@ -346,7 +363,7 @@ class Process
      * @param boolean $isError
      * @return void
      */
-    public function log(...$data)
+    private function log(...$data)
     {
         try {
             clearstatcache();
@@ -393,6 +410,10 @@ class Process
             }
 
             file_put_contents($this->logFile, $content, FILE_APPEND | LOCK_EX);
+
+            if ($isError && $this->alarmHook && is_callable($this->alarmHook)) {
+                call_user_func($this->alarmHook, $content);
+            }
         } catch (Throwable $e) {
             // no code
         }
@@ -402,7 +423,7 @@ class Process
      * 守护
      * @return void
      */
-    public function daemon()
+    private function daemon()
     {
         $pid = pcntl_fork();
         switch ($pid) {
