@@ -13,6 +13,10 @@ use Throwable;
  */
 class Process
 {
+    /**
+     * 进程名前缀
+     * @var string
+     */
     private $processTitle = '';
 
     /**
@@ -45,11 +49,13 @@ class Process
         $this->logFile = rtrim($runtimeDir, '/') . '/logs/process.log';
 
         set_exception_handler(function ($e) {
-            $this->log($e->getMessage(), true);
+            $this->log($e->getTraceAsString(), true);
+            exit(1);
         });
 
         set_error_handler(function (int $errorNo, string $errorMsg) {
             $this->log($errorMsg, true);
+            exit(1);
         });
     }
 
@@ -255,14 +261,17 @@ class Process
                     if ($job->workerEnabledTime > $startTime) {
                         $punishmentSleep = $job->workerEnabledTime - $startTime;
                         $this->log('worker started, but will punishment sleep ', $punishmentSleep, ' seconds, topic=', $job->topic, ', pid=', getmypid(), ', type=', $type);
-                        sleep($punishmentSleep);
                     } else {
                         $this->log('worker started, topic=', $job->topic, ', pid=', getmypid(), ', type=', $type);
                     }
                     while (true) {
-                        if (null !== $message = $job->brPop()) {
-                            $job->doJob($message);
-                            $consumeCount++;
+                        if ($job->workerEnabledTime > time()) {
+                            usleep(1000000);
+                        } else {
+                            if (null !== $message = $job->brPop()) {
+                                $job->doJob($message);
+                                $consumeCount++;
+                            }
                         }
                         if (
                             $this->getMasterPid() !== $masterPid || ($job->maxExecuteTime > 0 && (time() - $startTime) > $job->maxExecuteTime)
@@ -343,35 +352,35 @@ class Process
                 $isError = false;
             }
 
-            $content = sprintf("[%s%s][%s]%s\n", date('Y-m-d H:i:s'), strstr(strval(microtime(true)), '.'), $isError ? 'ERROR' : 'INFO', implode('', $data));
+            $content = sprintf("[%s%s][%s]%s\n", date('Y-m-d H:i:s'), substr(sprintf('%01.4f', explode(' ', microtime())[0]), 1), $isError ? 'ERROR' : 'INFO', implode('', $data));
 
             if (is_file($this->logFile) && filesize($this->logFile) > 10485760) {
-                $basename = basename($this->logFile);
-                $suffix = '';
-                $logFilePart = dirname($this->logFile) . '/';
-                if (false === $index = strrpos($basename, '.')) {
-                    $logFilePart .= $basename;
-                } else {
-                    $logFilePart .= substr($basename, 0, $index);
-                    $suffix = substr($basename, $index);
-                }
-                for ($i = 5; $i >= 2; $i--) {
-                    $logFileLeft .= ($i - 1) . $suffix;
-                    $logFileRight .= $i . $suffix;
-                    if (is_file($logFileLeft)) {
-                        rename($logFileLeft, $logFileRight);
+                if (false !== ($fp = fopen($this->logFile, 'a'))) {
+                    if (flock($fp, LOCK_EX | LOCK_NB)) {
+                        $basename = basename($this->logFile);
+                        $suffix = '';
+                        $logFilePart = dirname($this->logFile) . '/';
+                        if (false === $index = strrpos($basename, '.')) {
+                            $logFilePart .= $basename;
+                        } else {
+                            $logFilePart .= substr($basename, 0, $index);
+                            $suffix = substr($basename, $index);
+                        }
+                        for ($i = 5; $i >= 2; $i--) {
+                            $logFileLeft = $logFilePart . ($i - 1) . $suffix;
+                            $logFileRight = $logFilePart . $i . $suffix;
+                            if (is_file($logFileLeft)) {
+                                rename($logFileLeft, $logFileRight);
+                            }
+                        }
+                        rename($this->logFile, $logFileLeft);
+                        flock($fp, LOCK_UN);
                     }
+                    fclose($fp);
                 }
-                rename($this->logFile, $logFileLeft);
             }
 
-            if (false !== ($fp = fopen($this->logFile, 'a'))) {
-                flock($fp, LOCK_EX);
-                fwrite($fp, $content);
-                flock($fp, LOCK_UN);
-                fclose($fp);
-            }
-
+            file_put_contents($this->logFile, $content, FILE_APPEND | LOCK_EX);
         } catch (Throwable $e) {
             // no code
         }
@@ -386,15 +395,15 @@ class Process
         $pid = pcntl_fork();
         switch ($pid) {
             case -1:
-                $this->log('fork failed');
+                $this->log('fork failed', true);
                 exit(1);
             case 0:
                 if (posix_setsid() <= 0) {
-                    $this->log('set sid failed');
+                    $this->log('set sid failed', true);
                     exit(1);
                 }
                 if (chdir('/') === false) {
-                    $this->log('change directory failed');
+                    $this->log('change directory failed', true);
                     exit(1);
                 }
                 umask(0);
