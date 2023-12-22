@@ -49,7 +49,7 @@ class Process
         $this->logFile = rtrim($runtimeDir, '/') . '/logs/process.log';
 
         set_exception_handler(function ($e) {
-            $this->log($e->getTraceAsString(), true);
+            $this->log($e->getMessage(), $e->getTraceAsString(), true);
             exit(1);
         });
 
@@ -97,20 +97,34 @@ class Process
      */
     public function execute(string $cmd): void
     {
+        $masterPid = $this->getRunningMasterPid();
+        $this->log('cmd ', $cmd);
         switch ($cmd) {
             case 'start':
+                if (!!$masterPid) {
+                    echo "process already running\n";
+                    return;
+                }
                 $this->start();
                 break;
             case 'stop':
-                $this->stop();
+                if (!$masterPid) {
+                    echo 'process not running', PHP_EOL;
+                    return;
+                }
+                $this->stop($masterPid);
                 break;
             case 'restart':
-                if ($this->stop()) {
+                if (!!$masterPid) {
+                    if ($this->stop($masterPid)) {
+                        $this->start();
+                    }
+                } else {
                     $this->start();
                 }
                 break;
             case 'status':
-                if (!!$masterPid = $this->getMasterPid()) {
+                if (!!$masterPid) {
                     echo "process is running, pid={$masterPid}\n";
                 } else {
                     echo "process is not running\n";
@@ -127,76 +141,79 @@ class Process
      */
     private function start(): void
     {
-        if (!!$masterPid = $this->getMasterPid()) {
-            echo "process already running\n";
-            return;
-        }
-
         cli_set_process_title($this->processTitle . ':master');
         $this->daemon();
         $masterPid = getmypid();
         $this->storeMasterPid($masterPid);
         echo "process start success\n";
-        $this->log('master started, pid=', $masterPid);
+        $this->log('master start');
 
         foreach ($this->jobs as &$job) {
             $this->forkWorker($job, false, $masterPid);
             unset($job);
         }
 
+        $lastTime = 0;
         $sleep = 1000000;
-        $lastCheckOverstockTime = 0;
-        $continue = true;
-        while (true) {
-            if ($continue && $this->getMasterPid() !== $masterPid) {
-                $continue = false;
-                $sleep = 100000;
+        $exitSignal = false;
+        pcntl_signal(SIGUSR1, function ($signo) use (&$exitSignal, &$sleep) {
+            $exitSignal = true;
+            $sleep = 100000;
+            foreach ($this->jobs as $job) {
+                foreach ($job->workers as $workerPid => $nouse) {
+                    posix_kill($workerPid, SIGUSR1);
+                }
             }
+        });
+        while (true) {
+            pcntl_signal_dispatch();
 
             $time = time();
             $status = 0;
             if ((0 < $workerPid = pcntl_waitpid(-1, $status, WNOHANG)) && (!!$job = $this->loadJob($workerPid))) {
                 if (pcntl_wexitstatus($status) > 0) {
-                    $this->log('worker exited with error, topic=', $job->topic, ', pid=', $workerPid, true);
+                    $this->log('worker exit with error, pid=', $workerPid, true);
                     $job->workerEnabledTime = $time + 60;
                 } else {
-                    $this->log('worker exited, topic=', $job->topic, ', pid=', $workerPid);
+                    $this->log('worker exit, pid=', $workerPid);
                 }
-                if ($continue && !$job->workers[$workerPid]['is_dynamic']) {
+                if (!$exitSignal && !$job->workers[$workerPid]['is_dynamic']) {
                     $this->forkWorker($job, false, $masterPid);
                 }
                 unset($job->workers[$workerPid]);
             }
             unset($job);
 
-            if (-1 === $workerPid && !$continue) {
+            if ($exitSignal && -1 === $workerPid) {
                 break;
             }
-
-            if ($time - $lastCheckOverstockTime > 60) {
-                $lastCheckOverstockTime = $time;
-                $this->dynamicFork($masterPid);
+            if (!$exitSignal && $time - $lastTime > 60) {
+                $lastTime = $time;
+                if ($this->getRunningMasterPid() !== $masterPid) {
+                    $this->log('process file pid not match, master will exit', true);
+                    posix_kill($masterPid, SIGUSR1);
+                } else {
+                    $this->dynamicFork($masterPid);
+                }
             }
 
             usleep($sleep);
         }
+        $this->log('master exit');
     }
 
     /**
      * 停止
+     * @param integer $masterPid
      * @return boolean
      */
-    private function stop(): bool
+    private function stop($masterPid): bool
     {
-        if (!$masterPid = $this->getMasterPid()) {
-            echo 'process not running', PHP_EOL;
-            return true;
-        }
         $this->storeMasterPid(0);
+        posix_kill($masterPid, SIGUSR1);
         for ($i = 0; $i < 60; $i++) {
             if (!posix_kill($masterPid, 0)) {
                 echo 'process stop success', PHP_EOL;
-                $this->log('master stopped');
                 return true;
             }
             usleep(500000);
@@ -254,17 +271,27 @@ class Process
                 throw new Exception('fork worker error');
             case 0:
                 try {
-                    $type = $isDynamic ? 'dynamic' : 'static';
-                    cli_set_process_title($this->processTitle . ':worker-' . $type);
+                    cli_set_process_title($this->processTitle . ':worker');
                     $startTime = time();
                     $consumeCount = 0;
                     if ($job->workerEnabledTime > $startTime) {
-                        $punishmentSleep = $job->workerEnabledTime - $startTime;
-                        $this->log('worker started, but will punishment sleep ', $punishmentSleep, ' seconds, topic=', $job->topic, ', pid=', getmypid(), ', type=', $type);
+                        $this->log('worker start, but will punishment sleep ', ($job->workerEnabledTime - $startTime), ' seconds');
                     } else {
-                        $this->log('worker started, topic=', $job->topic, ', pid=', getmypid(), ', type=', $type);
+                        $this->log('worker start');
                     }
+                    $exitSignal = false;
+                    pcntl_signal(SIGUSR1, function ($signo) use (&$exitSignal) {
+                        $exitSignal = true;
+                    });
                     while (true) {
+                        pcntl_signal_dispatch();
+                        if (posix_getppid() !== $masterPid) {
+                            $this->log('worker found master died, worker will exit', true);
+                            break;
+                        }
+                        if ($exitSignal || ($job->maxExecuteTime > 0 && (time() - $startTime) > $job->maxExecuteTime) || ($job->maxConsumeCount > 0 && $consumeCount > $job->maxConsumeCount)) {
+                            break;
+                        }
                         if ($job->workerEnabledTime > time()) {
                             usleep(1000000);
                         } else {
@@ -272,12 +299,6 @@ class Process
                                 $job->doJob($message);
                                 $consumeCount++;
                             }
-                        }
-                        if (
-                            $this->getMasterPid() !== $masterPid || ($job->maxExecuteTime > 0 && (time() - $startTime) > $job->maxExecuteTime)
-                            || ($job->maxExecuteTime > 0 && $consumeCount > $job->maxExecuteTime)
-                        ) {
-                            break;
                         }
                     }
                 } catch (Throwable $e) {
@@ -292,40 +313,31 @@ class Process
     }
 
     /**
-     * 存储主进程ID
+     * 刷新存储主进程ID到文件
      * @param int $masterPid
      * @return void
      */
     public function storeMasterPid(int $masterPid): void
     {
-        try {
-            $dir = dirname($this->masterPidFile);
-            clearstatcache(true, $dir);
-            if (!is_dir($dir)) {
-                mkdir($dir, 0777, true);
-            }
-            file_put_contents($this->masterPidFile, $masterPid);
-        } catch (Throwable $e) {
-            throw $e;
+        $dir = dirname($this->masterPidFile);
+        clearstatcache(true, $dir);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0777, true);
         }
+        file_put_contents($this->masterPidFile, $masterPid);
     }
 
     /**
-     * 加载文件主进程ID
-     * @return int
+     * 获取正在运行的主进程ID
+     * @return integer
      */
-    public function getMasterPid(): int
+    public function getRunningMasterPid(): int
     {
-        try {
-            clearstatcache(true, $this->masterPidFile);
-            if (is_file($this->masterPidFile) && is_readable($this->masterPidFile) && (!!$masterPid = file_get_contents($this->masterPidFile)) && is_numeric($masterPid)) {
-                $masterPid = intval($masterPid);
-                return posix_kill($masterPid, 0) ? $masterPid : 0;
-            }
-            return 0;
-        } catch (Throwable $e) {
-            throw $e;
+        clearstatcache(true, $this->masterPidFile);
+        if (is_file($this->masterPidFile) && is_readable($this->masterPidFile) && (!!$masterPid = file_get_contents($this->masterPidFile)) && is_numeric($masterPid) && (1 <= $masterPid = intval($masterPid))) {
+            return posix_kill($masterPid, 0) ? $masterPid : 0;
         }
+        return 0;
     }
 
     /**
@@ -352,7 +364,7 @@ class Process
                 $isError = false;
             }
 
-            $content = sprintf("[%s%s][%s]%s\n", date('Y-m-d H:i:s'), substr(sprintf('%01.4f', explode(' ', microtime())[0]), 1), $isError ? 'ERROR' : 'INFO', implode('', $data));
+            $content = sprintf("[%s%s][%s][pid=%d]%s\n", date('Y-m-d H:i:s'), substr(sprintf('%01.4f', explode(' ', microtime())[0]), 1), $isError ? 'ERROR' : 'INFO', getmypid(), str_replace("\n", ' ', implode('', $data)));
 
             if (is_file($this->logFile) && filesize($this->logFile) > 10485760) {
                 if (false !== ($fp = fopen($this->logFile, 'a'))) {
